@@ -35,23 +35,30 @@ func main() {
 		}
 		
 		cmdStr := strings.TrimSpace(input)
-		if cmdStr == "" {
-			continue
-		}
-
-		// Handle AI-Native commands
-		if strings.HasPrefix(cmdStr, "routine ") {
-			spawnGortn(fsys, gortnsDir, cmdStr[8:], user)
-			continue
-		}
-
-		if cmdStr == "exit" || cmdStr == "quit" {
+		if !handleInput(cmdStr, user, fsys, gortnsDir) {
 			break
 		}
-
-		// Fallback to rc
-		executeInRc(cmdStr)
 	}
+}
+
+func handleInput(cmdStr string, user string, fsys *fs.FS, gortnsDir *fs.StaticDir) bool {
+	if cmdStr == "" {
+		return true
+	}
+
+	// Handle AI-Native commands
+	if strings.HasPrefix(cmdStr, "routine ") {
+		spawnGortn(fsys, gortnsDir, cmdStr[8:], user)
+		return true
+	}
+
+	if cmdStr == "exit" || cmdStr == "quit" {
+		return false
+	}
+
+	// Fallback to rc
+	executeInRc(cmdStr)
+	return true
 }
 
 func spawnGortn(fsys *fs.FS, dir *fs.StaticDir, thought, user string) {
