@@ -1,7 +1,10 @@
+//go:build rcpud
+
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Plan9-Archive/libauth"
 	"github.com/knusbaum/go9p"
 	"github.com/knusbaum/go9p/client"
 	"github.com/knusbaum/go9p/fs"
@@ -56,20 +58,59 @@ type rwCloser struct {
 	io.Closer
 }
 
-func main() {
-	ln, err := net.Listen("tcp", ":17019")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("o9 Master Namespace Server (rcpud) listening on :17019")
+type stdioConn struct {
+	io.ReadCloser
+	io.WriteCloser
+}
 
-	for {
-		conn, err := ln.Accept()
+func (s *stdioConn) Read(b []byte) (n int, err error)  { return s.ReadCloser.Read(b) }
+func (s *stdioConn) Write(b []byte) (n int, err error) { return s.WriteCloser.Write(b) }
+func (s *stdioConn) Close() error                     { s.ReadCloser.Close(); return s.WriteCloser.Close() }
+func (s *stdioConn) LocalAddr() net.Addr              { return &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)} }
+func (s *stdioConn) RemoteAddr() net.Addr             { return &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)} }
+func (s *stdioConn) SetDeadline(t time.Time) error    { return nil }
+func (s *stdioConn) SetReadDeadline(t time.Time) error { return nil }
+func (s *stdioConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func main() {
+	listenAddr := flag.String("l", "", "Listen address (e.g. :17019). If empty, use stdio.")
+	flag.Parse()
+
+	log.Printf("rcpud starting with NAMESPACE=%s", os.Getenv("NAMESPACE"))
+	factPath := filepath.Join(os.Getenv("NAMESPACE"), "factotum")
+	if _, err := os.Stat(factPath); err == nil {
+		log.Printf("Found factotum at %s", factPath)
+	} else {
+		log.Printf("Warning: factotum not found at %s", factPath)
+	}
+
+	dom := os.Getenv("AUTH_DOM")
+	if dom == "" {
+		dom = "rentonsoftworks.coin"
+	}
+
+	if *listenAddr != "" {
+		var ln net.Listener
+		var err error
+		ln, err = net.Listen("tcp", *listenAddr)
 		if err != nil {
-			log.Print(err)
-			continue
+			log.Fatal(err)
 		}
-		go handleRcpu(conn)
+		log.Printf("rcpud listening on %s\n", *listenAddr)
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				log.Print(err)
+				continue
+			}
+			go func(c net.Conn) {
+				handleRcpu(c, dom)
+			}(conn)
+		}
+	} else {
+		conn := &stdioConn{os.Stdin, os.Stdout}
+		handleRcpu(conn, dom)
 	}
 }
 
@@ -87,44 +128,94 @@ func parseScript(script []byte) map[string]string {
 	return env
 }
 
-func handleRcpu(conn net.Conn) {
+func handleRcpu(conn net.Conn, domain string) {
 	defer conn.Close()
-	fmt.Printf("Incoming connection from %s\n", conn.RemoteAddr())
+	log.Printf("Incoming connection from %s\n", conn.RemoteAddr())
 
-	ai, err := libauth.Proxy(conn, "role=server proto=dp9ik dom=rentonsoftworks.coin")
+	// Step 1: Offer p9any v2
+	log.Printf("Sending offer: v.2 dp9ik@%s", domain)
+	fmt.Fprintf(conn, "v.2 dp9ik@%s\x00", domain)
+
+	// Read choice byte-by-byte
+	var choiceBuf []byte
+	b := make([]byte, 1)
+	for {
+		_, err := conn.Read(b)
+		if err != nil {
+			log.Printf("Failed to read choice: %v", err)
+			return
+		}
+		if b[0] == '\x00' {
+			break
+		}
+		choiceBuf = append(choiceBuf, b[0])
+	}
+	log.Printf("Client choice: %q", string(choiceBuf))
+
+	// Send mandatory OK for v2
+	log.Printf("Sending OK confirmation")
+	conn.Write([]byte("OK\x00"))
+
+	// Step 2: Auth via fixed proxy (libauth.Proxy has a TCP coalescing bug)
+	authSpec := fmt.Sprintf("role=server proto=dp9ik dom=%s", domain)
+	log.Printf("Starting auth_proxy with: %s", authSpec)
+
+	ai, err := proxyAuth(conn, authSpec)
 	if err != nil {
 		log.Printf("Authentication failed: %v", err)
 		return
 	}
-	authedUser := ai.Cuid
-	fmt.Printf("User %s authenticated via Factotum.\n", authedUser)
 
-	reader := bufio.NewReader(conn)
-	
-	lenStr, _ := reader.ReadString('\n')
+	authedUser := ai.Cuid
+	log.Printf("User %s authenticated successfully\n", authedUser)
+
+	// Step 2.5: Upgrade to TLS-PSK using the auth secret
+	log.Printf("Upgrading connection to TLS-PSK...")
+	tls, err := wrapTlsPsk(conn, ai.Secret)
+	if err != nil {
+		log.Printf("TLS-PSK upgrade failed: %v", err)
+		return
+	}
+	log.Printf("TLS-PSK connection established.")
+	// NOTE: no defer tls.Close() — the go9p client's worker goroutine
+	// reads from tls in the background. Closing/freeing SSL while the
+	// worker is mid-read causes SIGSEGV. The worker exits when the
+	// remote peer closes the connection, and GC cleans up the handle.
+
+	// Step 3: rcpu Handshake — drawterm's rcpu sends script then starts 9P export
+	// No FS/\n/OK handshake. The script format is "%7ld\n%s" (7-char fixed-width dec + newline + body)
+	reader := bufio.NewReader(tls)
+
+	lenStr, err := reader.ReadString('\n')
+	if err != nil {
+		log.Printf("Failed to read script length: %v", err)
+		return
+	}
 	var scriptLen int
 	fmt.Sscanf(lenStr, "%d", &scriptLen)
-	
+
 	clientEnv := make(map[string]string)
 	if scriptLen > 0 {
 		scriptBuf := make([]byte, scriptLen)
-		io.ReadFull(reader, scriptBuf)
+		_, err = io.ReadFull(reader, scriptBuf)
+		if err != nil {
+			log.Printf("Failed to read script: %v", err)
+			return
+		}
 		clientEnv = parseScript(scriptBuf)
-	}
-	
-	conn.Write([]byte("FS\n"))
-	conn.Write([]byte("/\n"))
-
-	okBuf := make([]byte, 2)
-	_, err = io.ReadFull(reader, okBuf)
-	if err != nil || string(okBuf) != "OK" {
-		log.Printf("Failed to receive OK from client")
-		return
+		log.Printf("Received script from client: %s", string(scriptBuf))
 	}
 
-	rw := &rwCloser{reader, conn, conn}
+	// Fix script dir if it doesn't exist locally
+	if dir, ok := clientEnv["dir"]; ok && dir != "" {
+		if _, err := os.Stat(dir); err != nil {
+			log.Printf("Client dir %s not found locally, using home dir", dir)
+			delete(clientEnv, "dir")
+		}
+	}
 
-	cl, err := client.NewClient(rw, authedUser, "")
+	// Step 4: Client is now serving 9P via exportfs — connect as 9P client
+	cl, err := client.NewClient(tls, authedUser, "")
 	if err != nil {
 		log.Printf("Failed to start 9P client: %v", err)
 		return
@@ -143,7 +234,7 @@ func handleRcpu(conn net.Conn) {
 			devDir := fs.NewStaticDir(nsFS.NewStat("dev", authedUser, authedUser, 0755|proto.DMDIR))
 			nsRoot.AddChild(devDir)
 			devDir.AddChild(pfile)
-			fmt.Println("Virtual console established.")
+			log.Printf("Virtual console established.")
 		}
 	}
 
@@ -209,7 +300,7 @@ func handleRcpu(conn net.Conn) {
 	)
 
 	consPath := filepath.Join(nsDir, "dev/cons")
-	fmt.Printf("Attempting to open virtual console at %s\n", consPath)
+	log.Printf("Attempting to open virtual console at %s", consPath)
 	if f, err := os.OpenFile(consPath, os.O_RDWR, 0); err == nil {
 		cmd.Stdin = f
 		cmd.Stdout = f
@@ -228,5 +319,5 @@ func handleRcpu(conn net.Conn) {
 		log.Printf("Shell session failed: %v", err)
 	}
 
-	fmt.Println("rcpu session closed")
+	log.Printf("rcpu session closed")
 }
