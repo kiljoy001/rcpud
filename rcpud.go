@@ -240,7 +240,10 @@ func handleRcpu(conn net.Conn, domain string) {
 
 	// Initialize gortns agent manager
 	gm := NewGortnManager(nsFS, nsRoot, authedUser)
-	_ = gm // used below
+	_ = gm
+
+	// Connect drawsrv synthetic graphics device, if running
+	AddDrawProxy(nsFS, nsRoot, authedUser)
 
 	// Use a Unix socket for internal communication
 	sockDir, _ := os.MkdirTemp("", "o9.sock.*")
