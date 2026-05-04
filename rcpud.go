@@ -238,13 +238,6 @@ func handleRcpu(conn net.Conn, domain string) {
 		}
 	}
 
-	// Initialize gortns agent manager
-	gm := NewGortnManager(nsFS, nsRoot, authedUser)
-	_ = gm
-
-	// Connect drawsrv synthetic graphics device, if running
-	AddDrawProxy(nsFS, nsRoot, authedUser)
-
 	// Use a Unix socket for internal communication
 	sockDir, _ := os.MkdirTemp("", "o9.sock.*")
 	defer os.RemoveAll(sockDir)
@@ -281,7 +274,7 @@ func handleRcpu(conn net.Conn, domain string) {
 		shellPath = customCmd
 	}
 	if _, err := os.Stat(shellPath); err != nil {
-		shellPath = filepath.Join(os.Getenv("HOME"), "Repo/plan9port/o9/l9term")
+		shellPath = filepath.Join(os.Getenv("HOME"), "Repo/plan9port/o9/aiterm")
 	}
 
 	time.Sleep(1 * time.Second)
