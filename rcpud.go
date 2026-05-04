@@ -281,7 +281,7 @@ func handleRcpu(conn net.Conn, domain string) {
 		shellPath = customCmd
 	}
 	if _, err := os.Stat(shellPath); err != nil {
-		shellPath = filepath.Join(os.Getenv("HOME"), "Repo/plan9port/o9/aiterm")
+		shellPath = filepath.Join(os.Getenv("HOME"), "Repo/plan9port/o9/l9term")
 	}
 
 	time.Sleep(1 * time.Second)

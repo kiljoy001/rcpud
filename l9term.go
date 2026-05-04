@@ -1,4 +1,4 @@
-//go:build aiterm
+//go:build l9term
 
 package main
 
@@ -20,10 +20,16 @@ import (
 	"github.com/knusbaum/go9p/proto"
 )
 
-/*
- * aiterm.go - The 9P-Native AI Agent Shell
- * Standalone binary that serves /gortns/<id>/{status,ctl,in,out}
- * over TCP on 127.0.0.1:5640. Mount via 9pfuse for namespace access.
+/* 
+ * l9term.go - The 9P-Native Linux Remote Terminal Shell
+ * Serves /gortns/<id>/{status,ctl,in,out} over TCP on 127.0.0.1:5640.
+ * Mount via 9pfuse to access Linux processes from Plan 9 namespaces.
+ *
+ * The /gortns/ directory acts as a tabbed-task manager:
+ *   echo 'spawn "tail -f /var/log/syslog"' > /gortns/ctl   → new task
+ *   cat /gortns/t12345/out                                  → read its output
+ *   echo 'exec make' > /gortns/t12345/ctl                   → run command
+ *   echo 'stop' > /gortns/t12345/ctl                        → close tab
  */
 
 // agentBuf is a ring-buffer output stream with per-fid offset tracking.
@@ -109,15 +115,14 @@ func (ab *agentBuf) Read(fid uint64, count uint64) ([]byte, error) {
 	}
 }
 
-// Agent is a goroutine-backed actor with a 9P filesystem presence.
 type Agent struct {
 	id     string
 	out    *agentBuf
 	in     chan []byte
 	ctl    chan string
 	stop   chan struct{}
-	state  string // "running" or "stopped"
-	status string // detailed status line (e.g. "done: 0")
+	state  string
+	status string
 	mu     sync.Mutex
 }
 
@@ -140,7 +145,7 @@ func (a *Agent) setState(state, detail string) {
 }
 
 func (a *Agent) run(thought string) {
-	a.out.Write([]byte(fmt.Sprintf("[gortns %s] %s\n", a.id, thought)))
+	a.out.Write([]byte(fmt.Sprintf("[tab %s] %s\n", a.id, thought)))
 	for {
 		select {
 		case cmd := <-a.ctl:
@@ -148,7 +153,7 @@ func (a *Agent) run(thought string) {
 			switch {
 			case cmd == "stop":
 				a.setState("stopped", "")
-				a.out.Write([]byte(fmt.Sprintf("[gortns %s] stopped\n", a.id)))
+				a.out.Write([]byte(fmt.Sprintf("[tab %s] stopped\n", a.id)))
 				a.out.Close()
 				return
 			case strings.HasPrefix(cmd, "exec "):
@@ -156,11 +161,11 @@ func (a *Agent) run(thought string) {
 			case strings.HasPrefix(cmd, "echo "):
 				a.out.Write([]byte(strings.TrimPrefix(cmd, "echo ") + "\n"))
 			default:
-				a.out.Write([]byte(fmt.Sprintf("[gortns %s] unknown: %s\n", a.id, cmd)))
+				a.out.Write([]byte(fmt.Sprintf("[tab %s] unknown: %s\n", a.id, cmd)))
 			}
 		case <-a.stop:
 			a.setState("stopped", "")
-			a.out.Write([]byte(fmt.Sprintf("[gortns %s] stopped\n", a.id)))
+			a.out.Write([]byte(fmt.Sprintf("[tab %s] stopped\n", a.id)))
 			a.out.Close()
 			return
 		}
@@ -222,16 +227,8 @@ func (a *Agent) execCommand(shellCmd string) {
 	}
 }
 
-func stdoutPipe(cmd *exec.Cmd) io.ReadCloser {
-	r, _ := cmd.StdoutPipe()
-	return r
-}
-func stderrPipe(cmd *exec.Cmd) io.ReadCloser {
-	r, _ := cmd.StderrPipe()
-	return r
-}
-
-// --- 9P file implementations ---
+func stdoutPipe(cmd *exec.Cmd) io.ReadCloser { r, _ := cmd.StdoutPipe(); return r }
+func stderrPipe(cmd *exec.Cmd) io.ReadCloser { r, _ := cmd.StderrPipe(); return r }
 
 // AgentStatusFile
 type AgentStatusFile struct {
@@ -286,7 +283,7 @@ func (f *AgentInFile) Write(fid uint64, offset uint64, data []byte) (uint32, err
 	return uint32(len(data)), nil
 }
 
-// AgentOutFile — ring-buffered, blocking, offset-aware
+// AgentOutFile
 type AgentOutFile struct {
 	*fs.BaseFile
 	agent *Agent
@@ -306,21 +303,22 @@ func (f *AgentOutFile) Clunk(fid uint64) error {
 	return nil
 }
 
-// --- main ---
-
 func main() {
-	fmt.Println("AI TERM (9P-Native Agent Shell) Online.")
+	fmt.Println("l9term: 9P-Native Linux Remote Terminal")
+	fmt.Println("  echo 'spawn \"make\"' > /gortns/ctl     - start a tab")
+	fmt.Println("  cat /gortns/<id>/out                   - read output")
+	fmt.Println("  echo exec > /gortns/<id>/ctl           - run a command")
+	fmt.Println()
 
 	user := os.Getenv("USER")
 	if user == "" {
 		user = "scott"
 	}
 
-	fsys, groot := fs.NewFS("aiterm", user, 0755)
+	fsys, groot := fs.NewFS("l9term", user, 0755)
 	gortnsDir := fs.NewStaticDir(fsys.NewStat("gortns", user, user, 0755|proto.DMDIR))
 	groot.AddChild(gortnsDir)
 
-	// Serve 9P filesystem over TCP
 	go func() {
 		ln, err := net.Listen("tcp", "127.0.0.1:5640")
 		if err != nil {
@@ -336,10 +334,9 @@ func main() {
 		}
 	}()
 
-	// Main REPL loop
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Print("aiterm% ")
+		fmt.Print("l9term% ")
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			break
@@ -351,58 +348,48 @@ func main() {
 		if cmdStr == "exit" || cmdStr == "quit" {
 			break
 		}
-		handleInput(cmdStr, user, fsys, gortnsDir)
-	}
-}
+		if strings.HasPrefix(cmdStr, "tab ") || strings.HasPrefix(cmdStr, "spawn ") {
+			prefix := "spawn "
+			if strings.HasPrefix(cmdStr, "tab ") {
+				prefix = "tab "
+			}
+			thought := strings.TrimPrefix(cmdStr, prefix)
+			id := fmt.Sprintf("t%d", time.Now().UnixNano())
+			agent := newAgent(id)
+			agentDir := fs.NewStaticDir(fsys.NewStat(id, user, user, 0755|proto.DMDIR))
+			gortnsDir.AddChild(agentDir)
 
-func handleInput(cmdStr string, user string, fsys *fs.FS, gortnsDir *fs.StaticDir) bool {
-	if strings.HasPrefix(cmdStr, "routine ") {
-		spawnGortn(fsys, gortnsDir, cmdStr[8:], user)
-		return true
-	}
-	// Fallback to rc
-	executeInRc(cmdStr)
-	return true
-}
-
-func spawnGortn(fsys *fs.FS, dir *fs.StaticDir, thought, user string) {
-	id := fmt.Sprintf("t%d", time.Now().UnixNano())
-	fmt.Printf("[Gortn Spawned]: %s (ID: %s)\n", thought, id)
-
-	agent := newAgent(id)
-	agentDir := fs.NewStaticDir(fsys.NewStat(id, user, user, 0755|proto.DMDIR))
-	dir.AddChild(agentDir)
-
-	agentDir.AddChild(&AgentStatusFile{
-		BaseFile: fs.NewBaseFile(fsys.NewStat("status", user, user, 0444)),
-		agent:    agent,
-	})
-	agentDir.AddChild(&AgentCtlFile{
-		BaseFile: fs.NewBaseFile(fsys.NewStat("ctl", user, user, 0222)),
-		agent:    agent,
-	})
-	agentDir.AddChild(&AgentInFile{
-		BaseFile: fs.NewBaseFile(fsys.NewStat("in", user, user, 0222)),
-		agent:    agent,
-	})
-	agentDir.AddChild(&AgentOutFile{
-		BaseFile: fs.NewBaseFile(fsys.NewStat("out", user, user, 0444)),
-		agent:    agent,
-	})
-
-	go agent.run(thought)
-}
-
-func executeInRc(cmdStr string) {
-	shell := "/usr/local/plan9/bin/rc"
-	if _, err := os.Stat(shell); err != nil {
-		shell = "/bin/sh"
-	}
-	c := exec.Command(shell, "-c", cmdStr)
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	if err := c.Run(); err != nil {
-		fmt.Printf("[Shell Error]: %v\n", err)
+			agentDir.AddChild(&AgentStatusFile{
+				BaseFile: fs.NewBaseFile(fsys.NewStat("status", user, user, 0444)),
+				agent:    agent,
+			})
+			agentDir.AddChild(&AgentCtlFile{
+				BaseFile: fs.NewBaseFile(fsys.NewStat("ctl", user, user, 0222)),
+				agent:    agent,
+			})
+			agentDir.AddChild(&AgentInFile{
+				BaseFile: fs.NewBaseFile(fsys.NewStat("in", user, user, 0222)),
+				agent:    agent,
+			})
+			agentDir.AddChild(&AgentOutFile{
+				BaseFile: fs.NewBaseFile(fsys.NewStat("out", user, user, 0444)),
+				agent:    agent,
+			})
+			go agent.run(thought)
+			fmt.Printf("Tab %s: %s\n", id, thought)
+			continue
+		}
+		// Fallback to rc
+		shell := "/usr/local/plan9/bin/rc"
+		if _, err := os.Stat(shell); err != nil {
+			shell = "/bin/sh"
+		}
+		c := exec.Command(shell, "-c", cmdStr)
+		c.Stdin = os.Stdin
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		if err := c.Run(); err != nil {
+			fmt.Printf("[l9term] %v\n", err)
+		}
 	}
 }
