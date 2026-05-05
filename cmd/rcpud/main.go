@@ -316,6 +316,17 @@ func setupNamespace(cl *client.Client, user string) (*fs.FS, *fs.StaticDir) {
 			log.Printf("Virtual console established")
 		}
 	}
+	// If drawsrv framebuffer capture is configured, add /dev/fb/data
+	// that serves the current framebuffer pixels over 9P.
+	if drawsrvAddr != "" {
+		var fb Copyer
+		if f := openFBDumb(); f != nil {
+			fb = f
+		} else if f := openFB0(); f != nil {
+			fb = f
+		}
+		addFramebuffer(nsFS, nsRoot, user, fb)
+	}
 	return nsFS, nsRoot
 }
 

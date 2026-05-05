@@ -523,7 +523,7 @@ func TestHandleRcpuFull(t *testing.T) {
 	defer s.Close()
 	defer c.Close()
 
-	// 1. Mock negotiateProtocol and proxyAuth
+	// 1. Mock drawterm side (negotiation, auth, script, exportfs)
 	go func() {
 		buf := make([]byte, 4096)
 		// Negotiation
@@ -534,13 +534,17 @@ func TestHandleRcpuFull(t *testing.T) {
 		// Auth (none)
 
 		// Script reading
-		// Use a shell command that exists and exits quickly
 		script := "dir=/tmp\ncmd=/bin/ls\n"
 		s.Write([]byte(fmt.Sprintf("%d\n%s", len(script), script)))
-		
-		// Keep reading to prevent blocks, but we can close after a bit
-		time.Sleep(100 * time.Millisecond)
-		s.Close()
+
+		// 3. Act as 9P server (drawterm exportfs)
+		fsys, root := fs.NewFS(user, user, 0755)
+		devDir := fs.NewStaticDir(fsys.NewStat("dev", user, user, 0755|proto.DMDIR))
+		root.AddChild(devDir)
+		devDir.AddChild(fs.NewStaticFile(fsys.NewStat("cons", user, user, 0666), nil))
+
+		// Serve until pipe closed
+		go9p.ServeReadWriter(s, s, fsys.Server())
 	}()
 
 	// 2. Mock infrastructure functions
@@ -551,18 +555,7 @@ func TestHandleRcpuFull(t *testing.T) {
 	defer func() { wrapTlsPskFunc = oldWrap }()
 
 	oldNewCl := new9PClientFunc
-	new9PClientFunc = func(rwc io.ReadWriteCloser, user, aname string, opts ...client.Option) (*client.Client, error) {
-		ss, cc := net.Pipe()
-		go func() {
-			fsys, root := fs.NewFS(user, user, 0755)
-			devDir := fs.NewStaticDir(fsys.NewStat("dev", user, user, 0755|proto.DMDIR))
-			root.AddChild(devDir)
-			devDir.AddChild(fs.NewStaticFile(fsys.NewStat("cons", user, user, 0666), nil))
-			go9p.ServeReadWriter(ss, ss, fsys.Server())
-		}()
-		cl, err := client.NewClient(cc, user, aname, opts...)
-		return cl, err
-	}
+	new9PClientFunc = client.NewClient // Use real client logic, talks to mock on 's'
 	defer func() { new9PClientFunc = oldNewCl }()
 
 	oldStartSrv := startUnix9PServerFunc
@@ -578,10 +571,7 @@ func TestHandleRcpuFull(t *testing.T) {
 
 	oldMount := mountFUSEFunc
 	mountFUSEFunc = func(sockPath string) (string, *exec.Cmd, error) {
-		// Return a command that finishes immediately
-		c := exec.Command("true")
-		c.Start()
-		return mockNsDir, c, nil
+		return mockNsDir, &exec.Cmd{}, nil
 	}
 	defer func() { mountFUSEFunc = oldMount }()
 
@@ -616,7 +606,6 @@ func TestHandleRcpuFull(t *testing.T) {
 	// 3. Run handleRcpu
 	handleRcpu(c, "domain", nil)
 }
-
 type mockListener struct{}
 func (m *mockListener) Accept() (net.Conn, error) { return nil, fmt.Errorf("mock") }
 func (m *mockListener) Close() error { return nil }
