@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -37,7 +38,7 @@ func openFB() (*FB, error) {
 	f := &FB{fd: fd}
 	f.info.W, f.info.H, f.info.Bpp = int(vi.X), int(vi.Y), int(vi.Bpp)
 	f.info.Stride = f.info.W * (f.info.Bpp / 8)
-	log.Printf("fb: %dx%d bpp=%d", f.info.W, f.info.H, f.info.Bpp)
+	log.Printf("fb: %dx%d bpp=%d stride=%d", f.info.W, f.info.H, f.info.Bpp, f.info.Stride)
 	f.data, err = syscall.Mmap(fd, 0, f.info.Stride*f.info.H,
 		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	if err != nil {
@@ -64,7 +65,7 @@ func (f *FB) Close() {
 	}
 }
 
-// wsysmsg protocol (drawfcall.h)
+// wsysmsg types
 const (
 	Rerror = 1
 	Trdmouse = 2
@@ -102,31 +103,20 @@ func pstr(b []byte, s string) int {
 }
 
 func gstr(b []byte, o int) (int, string) {
-	if o+2 > len(b) {
-		return o, ""
-	}
+	if o+2 > len(b) { return o, "" }
 	n := int(g16(b[o:]))
 	o += 2
-	if o+n > len(b) {
-		n = len(b) - o
-		if n < 0 {
-			n = 0
-		}
-	}
+	if o+n > len(b) { n = len(b) - o; if n < 0 { n = 0 } }
 	return o + n, string(b[o:o+n])
 }
 
 func sz(m *M) int {
 	n := 2
 	switch m.T {
-	case Rrdmouse:
-		n += 17
-	case Rrdkbd:
-		n += 2
-	case Rrddraw:
-		n += 4 + int(m.N)
-	case Rerror:
-		n += 2 + len(m.Lbl)
+	case Rrdmouse: n += 17
+	case Rrdkbd: n += 2
+	case Rrddraw: n += 4 + int(m.N)
+	case Rerror: n += 2 + len(m.Lbl)
 	}
 	return n
 }
@@ -153,9 +143,7 @@ func wenc(m *M, b []byte) int {
 }
 
 func wdec(b []byte, m *M) int {
-	if len(b) < 2 {
-		return -1
-	}
+	if len(b) < 2 { return -1 }
 	m.T, m.Tag = b[0], b[1]
 	n := 2
 	switch m.T {
@@ -181,22 +169,17 @@ type UI struct{ fd int }
 
 func openUI() (*UI, error) {
 	fd, err := syscall.Open("/dev/uinput", syscall.O_RDWR, 0)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	ub := func(i uintptr, bits ...int) {
-		var b [16]uint32 // 512 bits for KEY events (BTN_* is 0x110+)
-		for _, v := range bits {
-			b[v/32] |= 1 << (v % 32)
-		}
+		var b [16]uint32
+		for _, v := range bits { b[v/32] |= 1 << (v % 32) }
 		syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), i, uintptr(unsafe.Pointer(&b[0])))
 	}
-	ub(0x40045564, 1, 3, 0)                               // KEY, ABS, SYN
-	ub(0x40045565, 0x110, 0x111, 0x112)                   // BTN_L,R,M
-	ub(0x40045567, 0, 1)                                   // ABS_X, ABS_Y
+	ub(0x40045564, 1, 3, 0)
+	ub(0x40045565, 0x110, 0x111, 0x112)
+	ub(0x40045567, 0, 1)
 	type ai struct{ V, Mn, Mx, Fz, Fl, R int32 }
-	x := ai{Mx: 8000}
-	y := ai{Mx: 4000}
+	x := ai{Mx: 8000}; y := ai{Mx: 4000}
 	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), 0x40085560, uintptr(unsafe.Pointer(&x)))
 	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), 0x40085561, uintptr(unsafe.Pointer(&y)))
 	type ud struct {
@@ -225,91 +208,90 @@ func (u *UI) ev(t, c uint16, v int32) {
 	e := ie{T: t, C: c, V: v}
 	syscall.Syscall(syscall.SYS_WRITE, uintptr(u.fd), uintptr(unsafe.Pointer(&e)), unsafe.Sizeof(e))
 }
-
 func (u *UI) Move(x, y int32) { u.ev(3, 0, x); u.ev(3, 1, y); u.ev(0, 0, 0) }
 func (u *UI) Close() {
-	if u.fd >= 0 {
-		syscall.Syscall(syscall.SYS_IOCTL, uintptr(u.fd), 0x5502, 0)
-		syscall.Close(u.fd)
+	if u.fd >= 0 { syscall.Syscall(syscall.SYS_IOCTL, uintptr(u.fd), 0x5502, 0); syscall.Close(u.fd) }
+}
+
+func handle(conn net.Conn, fb *FB, ui *UI) {
+	defer conn.Close()
+	h := make([]byte, 4)
+	b := make([]byte, 256*1024*1024) // 256MB for big framebuffers
+	for {
+		if _, err := conn.Read(h); err != nil { return }
+		n := int(g32(h))
+		if n < 2 || n > len(b) { return }
+		for t := 0; t < n; {
+			r, err := conn.Read(b[t:n])
+			if err != nil { return }
+			t += r
+		}
+		var m M
+		wdec(b[:n], &m)
+		var r M
+		switch m.T {
+		case Tinit:
+			log.Printf("init: %s %s", m.Ws, m.Lbl)
+			r.T, r.Tag = Rinit, m.Tag
+		case Trdmouse:
+			r.T, r.Tag = Rrdmouse, m.Tag
+		case Trdkbd:
+			r.T, r.Tag = Rrdkbd, m.Tag
+		case Trddraw:
+			r.T, r.Tag = Rrddraw, m.Tag
+			if fb != nil {
+				p := fb.Copy()
+				r.N = uint32(len(p))
+				r.D = p
+			}
+		case Tmoveto:
+			if ui != nil { ui.Move(m.X, m.Y) }
+			r.T, r.Tag = Rmoveto, m.Tag
+		default:
+			r.T, r.Tag = Rerror, m.Tag
+			r.Lbl = fmt.Sprintf("unhandled %d", m.T)
+		}
+		rs := sz(&r)
+		rb := make([]byte, rs+4)
+		p32(rb, uint32(rs))
+		wenc(&r, rb[4:])
+		conn.Write(rb)
 	}
 }
 
 func main() {
-	ns := os.Getenv("NAMESPACE")
-	if ns == "" {
-		ns = "/tmp"
-	}
-	sp := filepath.Join(ns, "drawsrv")
-	os.Remove(sp)
-	ln, err := net.Listen("unix", sp)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("drawsrv on %s", sp)
+	tcpAddr := flag.String("tcp", "", "TCP listen address (e.g. :17029)")
+	unixSock := flag.String("unix", "", "Unix socket path (default: $NAMESPACE/drawsrv)")
+	flag.Parse()
 
 	fb, _ := openFB()
 	ui, _ := openUI()
-	if ui != nil {
-		defer ui.Close()
-	}
+	if ui != nil { defer ui.Close() }
 
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			log.Fatal(err)
+	if *tcpAddr != "" {
+		ln, err := net.Listen("tcp", *tcpAddr)
+		if err != nil { log.Fatal(err) }
+		log.Printf("drawsrv TCP on %s", *tcpAddr)
+		for {
+			c, err := ln.Accept()
+			if err != nil { log.Fatal(err) }
+			go handle(c, fb, ui)
 		}
-		go func(conn net.Conn) {
-			defer conn.Close()
-			h := make([]byte, 4)
-			b := make([]byte, 4*1024*1024)
-			for {
-				if _, err := conn.Read(h); err != nil {
-					return
-				}
-				n := int(g32(h))
-				if n < 2 || n > len(b) {
-					return
-				}
-				for t := 0; t < n; {
-					r, err := conn.Read(b[t:n])
-					if err != nil {
-						return
-					}
-					t += r
-				}
-				var m M
-				wdec(b[:n], &m)
-				var r M
-				switch m.T {
-				case Tinit:
-					log.Printf("init: %s %s", m.Ws, m.Lbl)
-					r.T, r.Tag = Rinit, m.Tag
-				case Trdmouse:
-					r.T, r.Tag = Rrdmouse, m.Tag
-				case Trdkbd:
-					r.T, r.Tag = Rrdkbd, m.Tag
-				case Trddraw:
-					r.T, r.Tag = Rrddraw, m.Tag
-					if fb != nil {
-						p := fb.Copy()
-						r.N = uint32(len(p))
-						r.D = p
-					}
-				case Tmoveto:
-					if ui != nil {
-						ui.Move(m.X, m.Y)
-					}
-					r.T, r.Tag = Rmoveto, m.Tag
-				default:
-					r.T, r.Tag = Rerror, m.Tag
-					r.Lbl = fmt.Sprintf("unhandled %d", m.T)
-				}
-				rs := sz(&r)
-				rb := make([]byte, rs+4)
-				p32(rb, uint32(rs))
-				wenc(&r, rb[4:])
-				conn.Write(rb)
-			}
-		}(c)
+	} else {
+		sp := *unixSock
+		if sp == "" {
+			ns := os.Getenv("NAMESPACE")
+			if ns == "" { ns = "/tmp" }
+			sp = filepath.Join(ns, "drawsrv")
+		}
+		os.Remove(sp)
+		ln, err := net.Listen("unix", sp)
+		if err != nil { log.Fatal(err) }
+		log.Printf("drawsrv unix on %s", sp)
+		for {
+			c, err := ln.Accept()
+			if err != nil { log.Fatal(err) }
+			go handle(c, fb, ui)
+		}
 	}
 }
