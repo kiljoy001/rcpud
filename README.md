@@ -50,8 +50,6 @@ rcpu -G -h 192.168.2.2 -u scott
 
 ## Features
 
-### Working
-
 | Feature | Status |
 |---------|--------|
 | dp9ik authentication via factotum | Done |
@@ -75,35 +73,12 @@ rcpu -G -h 192.168.2.2 -u scott
 | Keyboard injection | TBD |
 | Channel format conversion | TBD |
 | Framebuffer delta updates | TBD |
-| Wire into rcpud namespace | TBD |
 
-## Comparison with lx
+## Similar projects
 
-[perpen/lx](https://github.com/perpen/lx) is a similar project: a Plan 9 → Linux cpu server written in C with 69 stars. It has the right ideas. Here is the honest comparison.
+[perpen/lx](https://github.com/perpen/lx) pioneered the idea of using Linux as a Plan 9 cpu server. It exports the Plan 9 namespace under `/9`, forwards notes to Linux signals, and supports X11 via VNC. Written in C against plan9port, last updated 2019.
 
-### What lx does well
-
-- Namespace export from Plan 9 to Linux (Plan 9 files appear under `/9`)
-- Note-to-signal translation (Delete key → SIGINT/SIGHUP/SIGKILL)
-- X11 forwarding via VNC
-- Clean C code with plan9port libraries
-
-### Where rcpud wins
-
-| | rcpud | lx |
-|---|---|---|
-| **Authentication** | dp9ik via factotum, the standard Plan 9 auth protocol | None |
-| **Encryption** | TLS-PSK using dp9ik session key | None |
-| **Client** | Unmodified drawterm — `rcpu -h <host>` | Custom `lx` binary must be installed on Plan 9 side |
-| **Language** | Go (easy to extend, no bootstrapping) | C (requires plan9port on Linux to compile) |
-| **Latency** | Persistent session — one connection per shell | ~0.6s per invocation (runs exportfs+9pfuse each time) |
-| **Pty** | Yes — shell gets a real pty for job control | No — "lx does not provide a pty" (README) |
-| **Draw protocol** | Native wsysmsg, Plan 9's own draw protocol | VNC only |
-| **Maintained** | Active (2026) | Last commit 6 years ago |
-
-### In short
-
-lx is a clever hack from 2019. It proved the concept but was never production-ready. rcpud is the production version: proper auth, encryption, persistent sessions, no client-side tools needed, active development. You just run `rcpu` from your existing 9front system.
+rcpud takes the same idea in a different direction: Go, drawterm wire compatibility (no client-side tools needed), dp9ik auth, TLS-PSK, and native wsysmsg draw protocol instead of VNC. Different tradeoffs for different use cases.
 
 ## Architecture
 
