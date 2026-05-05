@@ -86,15 +86,20 @@ func (s *stdioConn) SetReadDeadline(t time.Time) error  { return nil }
 func (s *stdioConn) SetWriteDeadline(t time.Time) error { return nil }
 
 var stripANSI bool
+var drawsrvAddr string
 
 func main() {
 	listenAddr := flag.String("l", "", "Listen address. If empty, use stdio.")
 	var mountFlags mountsFlag
 	flag.BoolVar(&stripANSI, "no-strip", false, "Disable ANSI escape stripping (show raw codes)")
+	flag.StringVar(&drawsrvAddr, "drawsrv", "", "drawsrv TCP address (e.g. :17029) for framebuffer export")
 	flag.Var(&mountFlags, "mount", "Directory to serve: path or name=path (repeatable)")
 	flag.Parse()
 
 	log.Printf("rcpud/%s starting", buildInfo)
+	if drawsrvAddr != "" {
+		log.Printf("drawsrv framebuffer at %s", drawsrvAddr)
+	}
 	if !stripANSI {
 		log.Printf("ANSI escape stripping enabled (use -no-strip to show raw codes)")
 	}
@@ -171,7 +176,9 @@ func parseScript(script []byte) map[string]string {
 }
 
 var (
-	wrapTlsPskFunc        = wrapTlsPsk
+	wrapTlsPskFunc        func(net.Conn, []byte) (net.Conn, error) = func(raw net.Conn, secret []byte) (net.Conn, error) {
+		return wrapTlsPsk(raw, secret)
+	}
 	new9PClientFunc       = client.NewClient
 	startUnix9PServerFunc = startUnix9PServer
 	mountFUSEFunc         = mountFUSE

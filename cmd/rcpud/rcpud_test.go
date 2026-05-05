@@ -527,40 +527,31 @@ func TestHandleRcpuFull(t *testing.T) {
 	go func() {
 		buf := make([]byte, 4096)
 		// Negotiation
-		s.Read(buf)
-		s.Write([]byte("OK\x00"))
-		// Auth
-		s.Read(buf)
-		s.Write([]byte("ok "))
-		s.Read(buf)
-		s.Write([]byte("done "))
-		s.Read(buf)
-		aiBuf := new(bytes.Buffer)
-		writeP9String(aiBuf, user)
-		writeP9String(aiBuf, user)
-		writeP9String(aiBuf, "cap")
-		writeP9Array(aiBuf, []byte("secret"))
-		s.Write(append([]byte("ok "), aiBuf.Bytes()...))
-		
-		// TLS-PSK and beyond (script reading)
-		// Since we'll mock wrapTlsPskFunc to return raw conn,
-		// we just send the script here.
-		script := "dir=/tmp\ncmd=ls\n"
+		s.Read(buf)                // read v.2...
+		s.Write([]byte("dp9ik\x00")) // send choice
+		s.Read(buf)                // read OK\x00
+
+		// Auth (none)
+
+		// Script reading
+		// Use a shell command that exists and exits quickly
+		script := "dir=/tmp\ncmd=/bin/ls\n"
 		s.Write([]byte(fmt.Sprintf("%d\n%s", len(script), script)))
+		
+		// Keep reading to prevent blocks, but we can close after a bit
+		time.Sleep(100 * time.Millisecond)
+		s.Close()
 	}()
 
 	// 2. Mock infrastructure functions
 	oldWrap := wrapTlsPskFunc
-	wrapTlsPskFunc = func(raw net.Conn, secret []byte) (*tlsConn, error) {
-		// Just return a dummy wrapper that uses the raw conn
-		return &tlsConn{laddr: raw.LocalAddr(), raddr: raw.RemoteAddr()}, nil
+	wrapTlsPskFunc = func(raw net.Conn, secret []byte) (net.Conn, error) {
+		return raw, nil
 	}
 	defer func() { wrapTlsPskFunc = oldWrap }()
 
 	oldNewCl := new9PClientFunc
 	new9PClientFunc = func(rwc io.ReadWriteCloser, user, aname string, opts ...client.Option) (*client.Client, error) {
-		// We need a real client to talk to something, but handleRcpu 
-		// just uses it for Stat/Open. We can mock the server it talks to.
 		ss, cc := net.Pipe()
 		go func() {
 			fsys, root := fs.NewFS(user, user, 0755)
@@ -569,7 +560,8 @@ func TestHandleRcpuFull(t *testing.T) {
 			devDir.AddChild(fs.NewStaticFile(fsys.NewStat("cons", user, user, 0666), nil))
 			go9p.ServeReadWriter(ss, ss, fsys.Server())
 		}()
-		return client.NewClient(cc, user, aname, opts...)
+		cl, err := client.NewClient(cc, user, aname, opts...)
+		return cl, err
 	}
 	defer func() { new9PClientFunc = oldNewCl }()
 
@@ -579,9 +571,17 @@ func TestHandleRcpuFull(t *testing.T) {
 	}
 	defer func() { startUnix9PServerFunc = oldStartSrv }()
 
+	mockNsDir, _ := os.MkdirTemp("", "rcpu-full-test.*")
+	defer os.RemoveAll(mockNsDir)
+	os.MkdirAll(filepath.Join(mockNsDir, "dev"), 0755)
+	os.WriteFile(filepath.Join(mockNsDir, "dev/cons"), nil, 0666)
+
 	oldMount := mountFUSEFunc
 	mountFUSEFunc = func(sockPath string) (string, *exec.Cmd, error) {
-		return "/tmp/mock.ns", &exec.Cmd{}, nil
+		// Return a command that finishes immediately
+		c := exec.Command("true")
+		c.Start()
+		return mockNsDir, c, nil
 	}
 	defer func() { mountFUSEFunc = oldMount }()
 
@@ -591,16 +591,29 @@ func TestHandleRcpuFull(t *testing.T) {
 	}
 	defer func() { openPtyFunc = oldOpenPty }()
 
-	// Mock factotum open
 	oldOpenFac := openFactotum
 	openFactotum = func() (io.ReadWriteCloser, error) {
-		_, cc := net.Pipe() // we don't care about the other end for this mock
-		return cc, nil
+		fs, fc := net.Pipe()
+		go func() {
+			buf := make([]byte, 4096)
+			fs.Read(buf)
+			fs.Write([]byte("ok "))
+			fs.Read(buf)
+			fs.Write([]byte("done "))
+			fs.Read(buf)
+			aiBuf := new(bytes.Buffer)
+			writeP9String(aiBuf, user)
+			writeP9String(aiBuf, user)
+			writeP9String(aiBuf, "cap")
+			writeP9Array(aiBuf, []byte("secret"))
+			fs.Write(append([]byte("ok "), aiBuf.Bytes()...))
+			fs.Close()
+		}()
+		return fc, nil
 	}
 	defer func() { openFactotum = oldOpenFac }()
 
 	// 3. Run handleRcpu
-	// It should run through Step 1, 2, 2.5, 3, 4, namespace setup, and launch fallback shell.
 	handleRcpu(c, "domain", nil)
 }
 
