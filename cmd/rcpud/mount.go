@@ -26,23 +26,23 @@ func newMountDir(path, name, uid, gid string) *mountDir {
 	mode := uint32(fi.Mode().Perm()) | proto.DMDIR
 	return &mountDir{
 		stat: proto.Stat{
-			Name: name,
-			Uid:  uid,
-			Gid:  gid,
-			Mode: mode,
-			Muid: uid,
+			Name:  name,
+			Uid:   uid,
+			Gid:   gid,
+			Mode:  mode,
+			Muid:  uid,
 			Mtime: uint32(fi.ModTime().Unix()),
 			Atime: uint32(time.Now().Unix()),
-			Qid:  proto.Qid{Qtype: uint8(mode >> 24), Vers: 0, Uid: uint64(fi.ModTime().UnixNano())},
+			Qid:   proto.Qid{Qtype: uint8(mode >> 24), Vers: 0, Uid: uint64(fi.ModTime().UnixNano())},
 		},
 		root: path,
 	}
 }
 
-func (d *mountDir) Stat() proto.Stat             { return d.stat }
+func (d *mountDir) Stat() proto.Stat              { return d.stat }
 func (d *mountDir) WriteStat(s *proto.Stat) error { return fmt.Errorf("read-only") }
 func (d *mountDir) SetParent(p fs.Dir)            {}
-func (d *mountDir) Parent() fs.Dir               { return nil }
+func (d *mountDir) Parent() fs.Dir                { return nil }
 
 func (d *mountDir) Children() map[string]fs.FSNode {
 	entries, err := os.ReadDir(d.root)
@@ -74,16 +74,16 @@ type mountFile struct {
 
 func newMountFile(path string, fi os.FileInfo, uid, gid string) *mountFile {
 	return &mountFile{
-		stat:  proto.Stat{
-			Name: fi.Name(),
-			Uid:  uid,
-			Gid:  gid,
-			Mode: uint32(fi.Mode().Perm()),
-			Muid: uid,
-			Mtime: uint32(fi.ModTime().Unix()),
-			Atime: uint32(time.Now().Unix()),
+		stat: proto.Stat{
+			Name:   fi.Name(),
+			Uid:    uid,
+			Gid:    gid,
+			Mode:   uint32(fi.Mode().Perm()),
+			Muid:   uid,
+			Mtime:  uint32(fi.ModTime().Unix()),
+			Atime:  uint32(time.Now().Unix()),
 			Length: uint64(fi.Size()),
-			Qid:  proto.Qid{Qtype: uint8(fi.Mode().Perm() >> 24), Vers: 0, Uid: uint64(fi.ModTime().UnixNano())},
+			Qid:    proto.Qid{Qtype: uint8(fi.Mode().Perm() >> 24), Vers: 0, Uid: uint64(fi.ModTime().UnixNano())},
 		},
 		path:  path,
 		opens: make(map[uint64]*os.File),
@@ -93,7 +93,7 @@ func newMountFile(path string, fi os.FileInfo, uid, gid string) *mountFile {
 func (f *mountFile) Stat() proto.Stat              { return f.stat }
 func (f *mountFile) WriteStat(s *proto.Stat) error { return fmt.Errorf("read-only") }
 func (f *mountFile) SetParent(p fs.Dir)            {}
-func (f *mountFile) Parent() fs.Dir               { return nil }
+func (f *mountFile) Parent() fs.Dir                { return nil }
 
 func (f *mountFile) Open(fid uint64, mode proto.Mode) error {
 	flags := os.O_RDONLY

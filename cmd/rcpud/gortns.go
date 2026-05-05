@@ -102,7 +102,7 @@ type Gortn struct {
 	// Output ring buffer
 	mu      sync.Mutex
 	outBuf  bytes.Buffer
-	outWake chan struct{}  // signals readers that new data arrived
+	outWake chan struct{} // signals readers that new data arrived
 	closed  bool
 
 	// Channels
@@ -213,8 +213,9 @@ func (g *Gortn) readOut(fid uint64, count uint64) ([]byte, error) {
 }
 
 func (g *Gortn) run() {
-	log.Printf("[gortns %s] spawned: %s", g.id, g.thought)
+	g.setState(StateRunning, "agent loop started")
 	g.writeOut([]byte(fmt.Sprintf("[gortns %s] %s\n", g.id, g.thought)))
+	defer g.gm.Remove(g.id)
 
 	for {
 		select {
@@ -240,29 +241,51 @@ func (g *Gortn) run() {
 	}
 }
 
-func (g *Gortn) handleCtl(cmd string) {
-	switch {
-	case cmd == "stop":
-		g.stopAgent()
+type commandHandler func(g *Gortn, arg string)
 
-	case strings.HasPrefix(cmd, "exec "):
-		g.execCommand(strings.TrimPrefix(cmd, "exec "))
+var gortnCommands = make(map[string]commandHandler)
 
-	case strings.HasPrefix(cmd, "spawn "):
-		subThought := strings.TrimPrefix(cmd, "spawn ")
-		id := fmt.Sprintf("%s.%d", g.id, time.Now().UnixNano())
-		if err := g.gm.Spawn(id, subThought); err != nil {
-			g.writeOut([]byte(fmt.Sprintf("[gortns %s] spawn error: %s\n", g.id, err)))
-		} else {
-			g.writeOut([]byte(fmt.Sprintf("[gortns %s] spawned %s: %s\n", g.id, id, subThought)))
-		}
+func init() {
+	gortnCommands["stop"] = handleStop
+	gortnCommands["exec"] = handleExec
+	gortnCommands["spawn"] = handleSpawn
+	gortnCommands["echo"] = handleEcho
+}
 
-	case strings.HasPrefix(cmd, "echo "):
-		g.writeOut([]byte(strings.TrimPrefix(cmd, "echo ") + "\n"))
-
-	default:
-		g.writeOut([]byte(fmt.Sprintf("[gortns %s] unknown cmd: %s\n", g.id, cmd)))
+func (g *Gortn) handleCtl(cmdLine string) {
+	parts := strings.SplitN(strings.TrimSpace(cmdLine), " ", 2)
+	verb := parts[0]
+	var arg string
+	if len(parts) > 1 {
+		arg = parts[1]
 	}
+
+	if handler, ok := gortnCommands[verb]; ok {
+		handler(g, arg)
+	} else {
+		g.writeOut([]byte(fmt.Sprintf("[gortns %s] unknown cmd: %s\n", g.id, verb)))
+	}
+}
+
+func handleStop(g *Gortn, _ string) {
+	g.stopAgent()
+}
+
+func handleExec(g *Gortn, arg string) {
+	g.execCommand(arg)
+}
+
+func handleSpawn(g *Gortn, arg string) {
+	id := fmt.Sprintf("%s.%d", g.id, time.Now().UnixNano())
+	if err := g.gm.Spawn(id, arg); err != nil {
+		g.writeOut([]byte(fmt.Sprintf("[gortns %s] spawn error: %s\n", g.id, err)))
+	} else {
+		g.writeOut([]byte(fmt.Sprintf("[gortns %s] spawned %s: %s\n", g.id, id, arg)))
+	}
+}
+
+func handleEcho(g *Gortn, arg string) {
+	g.writeOut([]byte(arg + "\n"))
 }
 
 func (g *Gortn) execCommand(shellCmd string) {

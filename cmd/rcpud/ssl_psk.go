@@ -172,8 +172,8 @@ func (c *tlsConn) Close() error {
 	return c.f.Close()
 }
 
-func (c *tlsConn) LocalAddr() net.Addr               { return c.laddr }
-func (c *tlsConn) RemoteAddr() net.Addr              { return c.raddr }
-func (c *tlsConn) SetDeadline(t time.Time) error     { return nil }
-func (c *tlsConn) SetReadDeadline(t time.Time) error { return nil }
-func (c *tlsConn) SetWriteDeadline(t time.Time) error{ return nil }
+func (c *tlsConn) LocalAddr() net.Addr                { return c.laddr }
+func (c *tlsConn) RemoteAddr() net.Addr               { return c.raddr }
+func (c *tlsConn) SetDeadline(t time.Time) error      { return nil }
+func (c *tlsConn) SetReadDeadline(t time.Time) error  { return nil }
+func (c *tlsConn) SetWriteDeadline(t time.Time) error { return nil }

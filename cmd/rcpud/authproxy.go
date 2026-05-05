@@ -24,11 +24,13 @@ func (e *exactReader) Read(p []byte) (int, error) {
 	return io.ReadFull(e.r, p)
 }
 
+var openFactotum = libauth.OpenRPC
+
 // proxyAuth is a drop-in replacement for libauth.Proxy that fixes
 // the phase-read bug: in ARphase, it reads EXACTLY the number of bytes
 // factotum asks for, rather than reading all available TCP data.
 func proxyAuth(rw io.ReadWriter, format string, a ...interface{}) (*AuthInfo, error) {
-	f, err := libauth.OpenRPC()
+	f, err := openFactotum()
 	if err != nil {
 		return nil, fmt.Errorf("openRPC: %w", err)
 	}
@@ -57,7 +59,7 @@ const authRpcMax = 4096
 type authRet int
 
 const (
-	arOK       authRet = iota
+	arOK authRet = iota
 	arDone
 	arError
 	arNeedkey

@@ -1,0 +1,24 @@
+2026/05/03 15:24:39 rcpud starting with NAMESPACE=/tmp/ns.scott.:1
+2026/05/03 15:24:39 Found factotum at /tmp/ns.scott.:1/factotum
+2026/05/03 15:24:39 rcpud listening on :17019
+2026/05/03 15:28:10 Incoming connection from 192.168.2.202:48062
+2026/05/03 15:28:10 Sending offer: v.2 dp9ik@rentonsoftworks.coin
+2026/05/03 15:28:10 Client choice: "dp9ik rentonsoftworks.coin"
+2026/05/03 15:28:10 Sending OK confirmation
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: phase
+2026/05/03 15:28:10 Factotum wants 8 bytes
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: phase
+2026/05/03 15:28:10 Factotum wants 56 bytes
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: phase
+2026/05/03 15:28:10 Factotum wants 192 bytes
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: ok
+2026/05/03 15:28:10 Factotum status: done
+2026/05/03 15:28:10 Authentication successful
+2026/05/03 15:28:10 User unknown authenticated successfully.
+2026/05/03 15:28:10 Failed to receive OK from client: got "\x00\b\x00"
+2026/05/03 15:28:10 Client Error: Can't allocate 1900550 bytes for message.

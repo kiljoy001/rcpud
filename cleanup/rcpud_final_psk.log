@@ -1,0 +1,3 @@
+2026/05/03 17:08:41 rcpud starting with NAMESPACE=/tmp/ns.scott.:1
+2026/05/03 17:08:41 Found factotum at /tmp/ns.scott.:1/factotum
+2026/05/03 17:08:41 listen tcp :17019: bind: address already in use
