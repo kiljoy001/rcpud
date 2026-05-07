@@ -1,7 +1,0 @@
-2026/05/03 15:49:48 rcpud starting with NAMESPACE=/tmp/ns.scott.:1
-2026/05/03 15:49:48 Found factotum at /tmp/ns.scott.:1/factotum
-2026/05/03 15:49:48 rcpud listening on :17019
-2026/05/03 15:58:34 Incoming connection from 192.168.2.202:45552
-2026/05/03 15:58:34 Warning: AUTH_PASS not set
-2026/05/03 15:58:34 Starting p9auth.Handshake for user scott, domain rentonsoftworks.coin...
-2026/05/03 15:58:34 Authentication failed: missing password

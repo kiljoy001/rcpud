@@ -1,7 +1,0 @@
-DT=/home/scott/Repo/go-dp9ik/drawterm
-DT_REAL=/home/scott/Repo/drawterm
-INCS=-I$(DT)/include -I$(DT)
-LIBS=-Wl,--start-group $(DT)/libsec/libsec.a $(DT)/libauthsrv/libauthsrv.a $(DT)/libmp/libmp.a $(DT)/libc/libc.a $(DT)/libmachdep.a -Wl,--end-group -lm -lpthread
-
-tlssrv_o9: tlssrv_o9.c stubs_o9.c $(DT_REAL)/libauth/auth_proxy.c $(DT_REAL)/libauthsrv/authdial.c $(DT_REAL)/libsec/readcert.c
-	gcc -O2 $(INCS) -o tlssrv_o9 tlssrv_o9.c stubs_o9.c $(DT_REAL)/libauth/auth_proxy.c $(DT_REAL)/libauthsrv/authdial.c $(DT_REAL)/libsec/readcert.c $(LIBS)
